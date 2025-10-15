@@ -29,7 +29,7 @@ This will contain a set of neural networks (MLP architecture) in JAX for rapid e
     - z_drag
     - r_drag
 
-The observables from CAMB and CLASS are saved in float32 in .npz files. The accuracy settings used for CAMB are:
+The observables from CAMB and CLASS are saved in float32 in .npz files.
 # CAMB Accuracy Settings
 ## Accurcy controls
 - AccuracyBoost: 2.0
@@ -55,8 +55,6 @@ The observables from CAMB and CLASS are saved in float32 in .npz files. The accu
 - pivot_scalar: 0.05
 - pivot_tensor: 0.05
 
-
-And for CLASS the accuracies used are:
 # CLASS Accuracy Settings
 ## Outputs
 - 'output': 'lCl,tCl,pCl,mPk
