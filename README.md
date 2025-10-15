@@ -37,7 +37,7 @@ The observables that are emulated are:
 | **Parameter**        | **Lower** | **Upper** | **Description**                                                            |
 | -------------------- | --------- | --------- | -------------------------------------------------------------------------- |
 | `H0`                 | 20        | 100       | Hubble constant *(km s⁻¹ Mpc⁻¹)*                                           |
-| `omega_b`            | 0.001     | 0.035     | Physical baryon density, Ω<sub>b</sub>h²                                   |
+| `omega_b`            | 0.001     | 0.030     | Physical baryon density, Ω<sub>b</sub>h²                                   |
 | `omega_cdm`          | 0.001     | 0.25      | Physical cold dark matter density, Ω<sub>cdm</sub>h²                       |
 | `n_s`                | 0.8       | 1.2       | Scalar spectral index                                                      |
 | `tau_reio`           | 0.01      | 0.3       | Optical depth to reionization                                              |
