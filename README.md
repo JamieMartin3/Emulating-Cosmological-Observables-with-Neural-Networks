@@ -59,7 +59,8 @@ And for CLASS the accuracies used are:
 # CLASS Accuracy Settings
 ## Outputs
 - 'output': 'lCl,tCl,pCl,mPk
-- 'modes': 's',
+- 'modes': 's'
+- 
 ## Accuracy controls
 - 'P_k_max_h/Mpc': 100.0
 - 'l_max_scalars': 10,000
@@ -93,12 +94,8 @@ And for CLASS the accuracies used are:
 - 'sBBN file': '/external/bbn/sBBN_2021.dat'
 - 'non_linear': 'hmcode'
 - 'lensing': 'yes'
-- if (N_eff > 3.03959):
- - 'N_ur': (N_eff - 3.03959) 
- - 'T_ncdm' : 0.71611 
-- else: 
- - 'N_ur' : 0 
- - 'T_ncdm' : 0.71611*(N_eff / 3.03959)**0.25
+- 'N_ur': (N_eff - 3.03959) and 'T_ncdm' : 0.71611  if N_eff > 3.03959
+- 'N_ur' : 0  and 'T_ncdm' : 0.71611*(N_eff / 3.03959)**0.25 if N_eff < 3.03959
 
 ## BB unlensed accuracy controls:
 - ‘modes’: ‘s, t’
