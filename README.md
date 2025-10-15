@@ -1,8 +1,8 @@
 # Emulating-Cosmological-Observables-with-Neural-Networks
 
-This project develops my Master's project to emualte more high quality cosmological observables.
+This project develops my Master's project to emulate more cosmological observables to higher quality.
 
-This will contain a set of neural networks (MLP architecture) in JAX for rapid emulation of comsological observables. The observables that are emulated are:
+This will contain a set of neural networks (MLP architecture) in JAX for rapid emulation of comsological observables for use in cosmological parameter inference. The observables that are emulated are:
 # Emulated Observables
 - Linear matter power spectrum
 - Nonlinear matter power spectrum
