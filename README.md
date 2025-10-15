@@ -3,7 +3,7 @@
 This project develops my Master's project to emualte more high quality cosmological observables.
 
 This will contain a set of neural networks (MLP architecture) in JAX for rapid emulation of comsological observables. The observables that are emulated are:
-
+# Emualted Observables
 - Linear matter power spectrum
 - Nonlinear matter power spectrum
 - Linear matter power spectrum (CB only)
@@ -47,7 +47,7 @@ The observables from CAMB and CLASS are saved in float32 in .npz files. The accu
 - nonlinear: true
 - recombination_model: HyRec
 
-# BB unlensed:
+    # BB unlensed accuracy controls:
 - max_l_tensor: 10,000
 - k_eta_max_tensor: max(getattr(acc, ‘k_eta_max_tensor’, 3.0*lmax), 3.0*lmax)
 - k_eta_max_scalar: max(getattr(acc, ‘k_eta_max_scalar’, 3.0*lmax), 3.0*lmax)
