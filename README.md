@@ -16,6 +16,7 @@ This will contain a set of neural networks (MLP architecture) in JAX for rapid e
 - Cl_te unlensed spectrum
 - Cl_bb lensed spectrum
 - Cl_bb unlensed spectrum
+- Cl_phi_phi
 - D_A(z)
 - H(z)
 - Derived paramteres:
