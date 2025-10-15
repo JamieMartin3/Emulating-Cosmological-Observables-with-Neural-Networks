@@ -2,7 +2,10 @@
 
 This project develops my Master's project to emulate more cosmological observables to higher quality.
 
-This will contain a set of neural networks (MLP architecture) in JAX for rapid emulation of comsological observables for use in cosmological parameter inference. The observables that are emulated are:
+This will contain a set of neural networks (MLP architecture) in JAX for rapid emulation of comsological observables for use in cosmological parameter inference. The observables from CAMB and CLASS are saved in float32 in .npz files.
+
+The observables that are emulated are:
+
 # Emulated Observables
 - Linear matter power spectrum
 - Nonlinear matter power spectrum
@@ -28,8 +31,26 @@ This will contain a set of neural networks (MLP architecture) in JAX for rapid e
     - r_star
     - z_drag
     - r_drag
+ 
+# Cosmological Parameter Emulation Ranges
+| **Parameter**        | **Lower** | **Upper** | **Description**                                               |
+| -------------------- | --------- | --------- | ------------------------------------------------------------- |
+| `H0`                 | 62.0      | 75.0      | Hubble constant *(km s⁻¹ Mpc⁻¹)*                              |
+| `omega_b`            | 0.022     | 0.0225    | Physical baryon density, Ω<sub>b</sub>h²                      |
+| `omega_cdm`          | 0.115     | 0.125     | Physical cold dark matter density, Ω<sub>cdm</sub>h²          |
+| `n_s`                | 0.93      | 1.0       | Scalar spectral index                                         |
+| `tau_reio`           | 0.052     | 0.057     | Optical depth to reionization                                 |
+| `logA`               | 2.95      | 3.08      | log(10¹⁰ A<sub>s</sub>), amplitude of primordial fluctuations |
+| `N_eff`              | 2.95      | 3.05      | Effective number of relativistic species                      |
+| `m_ncdm`             | 0.15      | 0.18      | Total neutrino mass per species (eV)                          |
+| `log10T_heat_hmcode` | 7.3       | 8.3       | Log of HMCode heating temperature                             |
+| `w0_fld`             | −1.1      | −0.9      | Dark energy equation-of-state parameter w₀                    |
+| `wa_fld`             | −0.1      | 0.1       | Dark energy evolution parameter wₐ                            |
+| `Omega_k`            | 0.0       | 0.01      | Curvature parameter Ω<sub>k</sub>                             |
+| `A_b`                | 3.0       | 3.2       | HMCode feedback amplitude                                     |
+| `eta_b`              | 0.6       | 0.7       | HMCode feedback slope                                         |
 
-The observables from CAMB and CLASS are saved in float32 in .npz files.
+
 # CAMB Accuracy Settings
 ## Accurcy controls
 - AccuracyBoost: 2.0
