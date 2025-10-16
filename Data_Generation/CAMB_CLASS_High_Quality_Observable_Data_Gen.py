@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import os
+import sys
 from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Deque, Dict, Iterable, List, Optional, Tuple
@@ -25,6 +26,8 @@ import camb
 from camb import CAMBparams, model
 import pyDOE
 
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 # --------------------------------------------------------------------------------------
 # Shared cosmology constants (mirrors Cl_CLASS_CAMB_Test.py)
@@ -51,25 +54,13 @@ class LCDM:
 # --------------------------------------------------------------------------------------
 # Sampling configuration mirrors LHC_Gen_YAML.py
 # --------------------------------------------------------------------------------------
-COSMO_PARAMS = [
-    'logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio',
-    'm_ncdm', 'N_eff', 'r', 'log10T_heat_hmcode',
-    'w0_fld', 'wa_fld', 'Omega_k'
-]
-
-COSMO_PARAMS_CLASS = [
-    'ln10^{10}A_s', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio',
-    'm_ncdm', 'N_eff', 'r', 'log10T_heat_hmcode',
-    'w0_fld', 'wa_fld', 'Omega_k'
-]
 
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_OUTPUT = Path("./batch_outputs")
 
-Z_PK = 2.5
 K_VALS = np.logspace(-4, 1, 200)
 Z_BG = np.linspace(0, 5, 5_000)
-L_MAX = 10_000
+L_MAX = 3_000
 ERROR_LOG_FILENAME = "error_log.jsonl"
 
 class SamplerConfig(object):
@@ -103,28 +94,17 @@ def load_yaml_config(yaml_path: Path) -> Dict:
 
 
 def extract_param_specs(config: Dict) -> OrderedDict[str, ParamSpec]:
-    """Extract uniform parameter bounds from YAML configuration."""
-    params_section = config.get("params", {})
+    """Extract parameter bounds directly from YAML file (dynamic list)."""
+    params_section = config.get('params', {})
     specs: OrderedDict[str, ParamSpec] = OrderedDict()
 
     for name, entry in params_section.items():
-        prior = entry.get("prior")
-        if not prior:
+        prior = entry.get('prior', {})
+        if 'min' not in prior or 'max' not in prior:
             continue
 
-        # Only accept parameters that define explicit uniform bounds
-        if "min" in prior and "max" in prior:
-            bounds = {
-                "min": float(prior["min"]),
-                "max": float(prior["max"]),
-            }
-
-            # Optional: only include parameters of interest
-            if name not in COSMO_PARAMS:
-                continue
-
-            idx = COSMO_PARAMS.index(name)
-            specs[name] = ParamSpec(bounds=bounds, class_name=COSMO_PARAMS_CLASS[idx])
+        bounds = {'min': float(prior['min']), 'max': float(prior['max'])}
+        specs[name] = ParamSpec(bounds=bounds, class_name=name)  # direct mapping
 
     return specs
 
@@ -235,9 +215,12 @@ def build_full_parameter_dict(sample: Dict[str, float]) -> Dict[str, float]:
         'wa_fld': sample.get('wa_fld', 0.0),
         'Omega_k': sample.get('Omega_k', LCDM.omega_k),
         'N_ncdm': sample.get('N_ncdm', 3),
+        'z_pk': sample.get('z_pk', 2.5),
         'N_ur': sample.get('N_ur', max(LCDM.Neff - 3, 0.0)),
         'deg_ncdm': sample.get('deg_ncdm', 3),
         'T_ncdm': sample.get('T_ncdm', 0.71611 / ((4.0/11.0)**(1.0/3.0))),
+        'A_b': sample.get('A_b', 3.13),
+        'eta_b': sample.get('eta_b', 0.603),
     }
     full['A_s'] = logA_to_As(full['logA'])
     return full
@@ -260,8 +243,10 @@ def build_camb_class_input(full_params: Dict[str, float]) -> Dict[str, float]:
         'w0_fld': float(full_params['w0_fld']),
         'wa_fld': float(full_params['wa_fld']),
         'Omega_k': float(full_params['Omega_k']),
-        'zpk': Z_PK,
+        'z_pk': float(full_params['z_pk']),
         'N_ncdm': int(full_params['N_ncdm']),
+        'A_b': float(full_params['A_b']),
+        'eta_b': float(full_params['eta_b']),
         'N_ur': full_params['N_ur'],
         'T_ncdm': full_params['T_ncdm'],
         'deg_ncdm': int(full_params['deg_ncdm']),
@@ -316,33 +301,27 @@ def configure_camb_params(p: Dict[str, float], nonlinear: bool = True, lmax: int
         acc.k_eta_max_scalar = max(getattr(acc, 'k_eta_max_scalar', 3.0 * lmax), 3.0 * lmax)
 
     params.NonLinear = model.NonLinear_both if nonlinear else model.NonLinear_none
-    params.set_matter_power(redshifts=[p.get('zpk', Z_PK)], kmax=10, k_per_logint=130)
+    params.set_matter_power(redshifts=[p.get('z_pk')], kmax=10, k_per_logint=130)
 
     params.AccurateMassiveNeutrinoTransfers = True
     params.DoLateRadTruncation = False
     params.recombination_model = "HyRec"
-    params.halofit_version = "mead2020"
+    params.halofit_version = "mead2020_feedback"
     params.TCMB = Planck.Tcmb0.value
     '''
     log10T_heat = p.get('log10T_heat_hmcode')   
-    A_b = p.get('A_b', 3.13)
-    eta_b = p.get('eta_b', 0.603)
-    if any(x is not None for x in [log10T_heat, A_b, eta_b]):
-        try:
-            kwargs = {}
-            if log10T_heat is not None and not math.isnan(log10T_heat):
-                kwargs['log10T_heat'] = log10T_heat
-            if A_b is not None and not math.isnan(A_b):
-                kwargs['A_b'] = A_b
-            if eta_b is not None and not math.isnan(eta_b):
-                kwargs['eta_b'] = eta_b
-            params.NonLinearModel.set_params(**kwargs)
-        except AttributeError:
-            pass
-    
+    #A_b = p.get('A_b', 3.13)
+    #eta_b = p.get('eta_b', 0.603)
+    params.NonLinearModel.set_params(
+        halofit_version="mead2020_feedback",
+        #HMCode_A_baryon=A_b,
+        #HMCode_eta_baryon=eta_b,
+        HMCode_logT_AGN=log10T_heat,
+    )
+    '''
     if 'w0_fld' in p or 'wa_fld' in p:
         params.set_dark_energy(w=p.get('w0_fld', -1.0), wa=p.get('wa_fld', 0.0))
-    '''
+    
     return params
 
 
@@ -362,7 +341,7 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
         'n_s': p['ns'],
         'T_cmb': Planck.Tcmb0.value,
         'YHe': 'BBN',
-        'z_max_pk': max(p.get('zpk', Z_PK), 0.0) + 0.5,
+        'z_max_pk': max(p.get('z_pk'), 0.0) + 0.5,
         'N_ncdm': p.get('N_ncdm', 1) * p.get('deg_ncdm', 1),
         'm_ncdm': p['m_ncdm_str'],
         'N_ur': p.get('N_ur', 0.0),
@@ -398,11 +377,12 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
         'start_sources_at_tau_c_over_tau_h': 0.006,
         'tol_ncdm_synchronous': 1e-6,
         'recombination': 'HyRec',
-        'sBBN file': '/external/bbn/sBBN_2021_copy.dat',
+        'sBBN file': '/external/bbn/sBBN_2021.dat',
         'non_linear': 'hmcode',
+        'hmcode_version': '2020_baryonic_feedback',
         'lensing': 'yes',
     }
-    '''
+    
     if 'w0_fld' in p or 'wa_fld' in p:
         class_params['fluid_equation_of_state'] = 'CLP'
         class_params['Omega_fld'] = 1.0 - (class_params['Omega_b'] + class_params['Omega_cdm'] + class_params.get('Omega_k', 0.0))
@@ -412,13 +392,13 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
     log10T_heat = p.get('log10T_heat_hmcode')
     A_b = p.get('A_b', 3.13)
     eta_b = p.get('eta_b', 0.603)
-
+    '''
     if log10T_heat is not None and not math.isnan(log10T_heat):
         class_params['log10T_heat'] = log10T_heat
     if A_b is not None and not math.isnan(A_b):
-        class_params['A_b'] = A_b
+        class_params['A_baryon'] = A_b
     if eta_b is not None and not math.isnan(eta_b):
-        class_params['eta_b'] = eta_b    
+        class_params['eta_baryon'] = eta_b 
     '''
     if BB:
         class_params.update({
@@ -432,18 +412,35 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
     return class_params
 
 
+def fails_de_checks(w0, wa, eps=1):
+    w_early = w0 + wa
+    # 1. Early dark energy too large
+    if w_early >= 1.0/3.0 - 1e-3:
+        return True, f"w(a→0)={w_early:.3f} ≥ 1/3 (no radiation domination)"
+    # 2. Phantom divide crossing or proximity
+    w_min, w_max = sorted([w0, w_early])
+    if (w_min - (-1) < eps) and ((-1) - w_max < eps):
+        return True, f"w(a) crosses or touches -1 (w0={w0:.3f}, wa={wa:.3f})"
+    return False, ""
+
+
 # --------------------------------------------------------------------------------------
 # Observable computation helpers
 # --------------------------------------------------------------------------------------
 
 
 def compute_class_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
+    print("  [CLASS] Setting nonlinear CLASS parameters...")
     class_params_nl = configure_class(p, lmax=L_MAX, nonlinear=True, BB=False)
     cl_nl = classy.Class()
+    print()
 
+    print("  [CLASS] Computing nonlinear CLASS model...")
     cl_nl.set(class_params_nl)
     cl_nl.compute()
+    print("  [CLASS] Nonlinear CLASS computation finished ✅")
 
+    print("  [CLASS] Extracting lensed/unlensed Cls...")
     cls_l = cl_nl.lensed_cl()
     ell_lensed = cls_l['ell']
     ell_factor = ell_lensed * (ell_lensed + 1) / (2 * np.pi)
@@ -452,22 +449,27 @@ def compute_class_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
     ell_unlensed = cls_raw['ell']
     ell_factor_unlensed = ell_unlensed * (ell_unlensed + 1) / (2 * np.pi)
 
-    pk_lin = np.array([cl_nl.pk_lin(k, p.get('zpk', Z_PK)) for k in K_VALS])
-    pk_nonlin = np.array([cl_nl.pk(k, p.get('zpk', Z_PK)) for k in K_VALS])
+    print("  [CLASS] Computing matter power spectra (P(k))...")
+    pk_lin = np.array([cl_nl.pk_lin(k, p.get('z_pk')) for k in K_VALS])
+    pk_nonlin = np.array([cl_nl.pk(k, p.get('z_pk')) for k in K_VALS])
 
-    pk_nonlin_cb = np.array([cl_nl.pk_cb(k, p.get('zpk', Z_PK)) for k in K_VALS])
-    pk_lin_cb = np.array([cl_nl.pk_cb_lin(k, p.get('zpk', Z_PK)) for k in K_VALS])
+    pk_nonlin_cb = np.array([cl_nl.pk_cb(k, p.get('z_pk')) for k in K_VALS])
+    pk_lin_cb = np.array([cl_nl.pk_cb_lin(k, p.get('z_pk')) for k in K_VALS])
 
+    print("  [CLASS] Computing background quantities (H(z), D_A(z))...")
     H_class = np.array([cl_nl.Hubble(z) for z in Z_BG]) * 299792.458
     DA_class = np.array([cl_nl.angular_distance(z) for z in Z_BG])
 
+    print("  [CLASS] Extracting derived parameters...")
     derived = cl_nl.get_current_derived_parameters(
         ['sigma8', 'z_reio', 'z_d', 'rs_d', 'z_rec', 'rs_rec', '100*theta_s', 'YHe']
     )
 
+    print("  [CLASS] Cleaning up nonlinear CLASS instance...")
     cl_nl.struct_cleanup()
     cl_nl.empty()
 
+    print("  [CLASS] Running B-mode (BB) tensor calculation...")
     class_params_bb = configure_class(p, lmax=L_MAX, nonlinear=True, BB=True)
     cl_bb = classy.Class()
     cl_bb.set(class_params_bb)
@@ -477,9 +479,11 @@ def compute_class_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
     ell_unlensed_bb = cls_bb['ell']
     ell_factor_bb = ell_unlensed_bb * (ell_unlensed_bb + 1) / (2 * np.pi)
     cl_bb_unlensed = cls_bb['bb'] * ell_factor_bb
+    print("  [CLASS] B-mode computation complete ✅")
 
     cl_bb.struct_cleanup()
     cl_bb.empty()
+    print("  [CLASS] Finished full CLASS observable computation ✅")
 
     return {
         'ell_lensed': ell_lensed,
@@ -515,24 +519,30 @@ def compute_class_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
 
 
 def compute_camb_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
+    print("  [CAMB] Setting nonlinear CAMB parameters...")
     camb_params_nl = configure_camb_params(p, nonlinear=True, lmax=L_MAX, BB=False)
     camb_results_nl = camb.get_results(camb_params_nl)
-    
+    print("  [CAMB] Nonlinear CAMB computation finished ✅")
+
+    print("  [CAMB] Extracting Cls (lensed/unlensed)...")
     lensed_cls = camb_results_nl.get_lensed_scalar_cls(lmax=L_MAX)
     unlensed_cls = camb_results_nl.get_unlensed_scalar_cls(lmax=L_MAX)
     lp_camb = camb_results_nl.get_lens_potential_cls(lmax=L_MAX, raw_cl=True)
     
+    print("  [CAMB] Computing nonlinear matter power spectra...")
     pk_nonlin = camb.get_matter_power_interpolator(
-        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=3
-    ).P(p.get('zpk', Z_PK), K_VALS)
+        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=30
+    ).P(p.get('z_pk'), K_VALS)
     
-    pk_nonlin_cb = camb.get_matter_power_interpolator(camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=3, var1='delta_nonu', var2='delta_nonu').P(p.get('zpk', Z_PK), K_VALS)
+    pk_nonlin_cb = camb.get_matter_power_interpolator(camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=30, var1='delta_nonu', var2='delta_nonu').P(p.get('z_pk'), K_VALS)
 
+    print("  [CAMB] Computing background functions (H(z), D_A(z))...")
     H_camb = np.array([camb_results_nl.hubble_parameter(z) for z in Z_BG])
     DA_camb = np.array([camb_results_nl.angular_diameter_distance(z) for z in Z_BG])
-    
+
+    print("  [CAMB] Extracting derived parameters at z=0...")
     param_dict_z0 = dict(p)
-    param_dict_z0['zpk'] = 0.0
+    param_dict_z0['z_pk'] = 0.0
     camb_params_nl_zero = configure_camb_params(param_dict_z0, nonlinear=True, lmax=L_MAX)
     camb_results_nl_zero = camb.get_results(camb_params_nl_zero)
 
@@ -548,18 +558,22 @@ def compute_camb_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
         'r_drag': derived['rdrag'],
     }
 
+    print("  [CAMB] Computing linear P(k) for comparison...")
     camb_params_lin = configure_camb_params(p, nonlinear=False, lmax=L_MAX)
 
     pk_lin = camb.get_matter_power_interpolator(
-        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=3
-    ).P(p.get('zpk', Z_PK), K_VALS)
+        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=30
+    ).P(p.get('z_pk'), K_VALS)
     
-    pk_lin_cb = camb.get_matter_power_interpolator(camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=3, var1='delta_nonu', var2='delta_nonu').P(p.get('zpk', Z_PK), K_VALS)
+    pk_lin_cb = camb.get_matter_power_interpolator(camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=30, var1='delta_nonu', var2='delta_nonu').P(p.get('z_pk'), K_VALS)
 
+    print("  [CAMB] Computing B-mode (BB) spectrum...")
     camb_params_bb = configure_camb_params(p, nonlinear=True, lmax=L_MAX, BB=True)
     camb_results_bb = camb.get_results(camb_params_bb)
     bb_unlensed = camb_results_bb.get_unlensed_total_cls(lmax=L_MAX)
-    
+    print("  [CAMB] B-mode computation complete ✅")
+
+    print("  [CAMB] Finished full CAMB observable computation ✅")
     return {
         'ell_lensed': np.arange(lensed_cls.shape[0]),
         'cl_tt_lensed': lensed_cls.T[0],
@@ -646,9 +660,32 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         camb_class_input = build_camb_class_input(full_params)
         print(f"[Batch {batch_idx}, Set {set_counter+1}] Params: {full_params}")
         
+        # ----------------------------------------------------------------------
+        # ⚠️ Step 1: quick analytical filter for w(a) crossing -1
+        # ----------------------------------------------------------------------
+        w0 = camb_class_input.get("w0_fld", -1.0)
+        wa = camb_class_input.get("wa_fld", 0.0)
+        w_early = w0 + wa
+
+        fails, why = fails_de_checks(w0, wa)
+        if fails:
+            msg = f"w(a) too close to -1 (w0={w0:.3f}, wa={wa:.3f}) — CAMB cannot handle phantom boundary"
+            append_error_log(error_log_path, {
+                "batch": batch_idx,
+                "set_index": set_counter + 1,
+                "stage": "Pre-filter",
+                "parameters": full_params,
+                "error": msg,
+            })
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] Skipping: {msg}")
+            continue
+
+        # ----------------------------------------------------------------------
+        # 🧮 Step 2: CLASS observables
+        # ----------------------------------------------------------------------
         try:
             class_data = compute_class_observables(camb_class_input)
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS complete")
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS complete ✅")
         except Exception as exc:
             append_error_log(error_log_path, {
                 'batch': batch_idx,
@@ -657,12 +694,15 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
                 'parameters': full_params,
                 'error': repr(exc),
             })
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS failed: {repr(exc)}")
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS failed ❌: {repr(exc)}")
             continue
 
+        # ----------------------------------------------------------------------
+        # 🧮 Step 3: CAMB observables
+        # ----------------------------------------------------------------------
         try:
             camb_data = compute_camb_observables(camb_class_input)
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB complete")
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB complete ✅")
         except Exception as exc:
             append_error_log(error_log_path, {
                 'batch': batch_idx,
@@ -671,14 +711,18 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
                 'parameters': full_params,
                 'error': repr(exc),
             })
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB failed: {repr(exc)}")
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB failed ❌: {repr(exc)}")
             continue
 
+        # ----------------------------------------------------------------------
+        # 💾 Step 4: Save results
+        # ----------------------------------------------------------------------
         set_idx = set_counter + 1
         save_parameters(batch_dir / f"set_{set_idx:02d}_params", full_params)
         save_npz(batch_dir / f"set_{set_idx:02d}_class", class_data)
         save_npz(batch_dir / f"set_{set_idx:02d}_camb", camb_data)
-        print(f"[Batch {batch_idx}, Set {set_idx}] Saved successfully.")
+        print(f"[Batch {batch_idx}, Set {set_idx}] Saved successfully 💾")
+
         set_counter += 1
         
 
@@ -692,13 +736,13 @@ def parse_args() -> SamplerConfig:
     parser.add_argument(
         '--yaml-file',
         type=Path,
-        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/parameter-ranges copy.yaml',
+        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/parameter-ranges-true.yaml',
         help='Cobaya YAML file used to define cosmological parameter priors.'
     )
     parser.add_argument(
         '--output-dir',
         type=Path,
-        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/Slurm_Batch/sh_batch_outputs',
+        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/Slurm_Batch/CAMB-CLASS/sh_batch_outputs',
         help='Directory where batch outputs will be written.'
     )
     parser.add_argument(
