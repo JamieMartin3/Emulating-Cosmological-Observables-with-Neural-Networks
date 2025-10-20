@@ -23,7 +23,6 @@ from astropy.cosmology import Planck15 as Planck
 import time
 
 import classy
-from classy import Class
 import camb
 from camb import CAMBparams, model
 import pyDOE
@@ -56,30 +55,13 @@ class LCDM:
 # --------------------------------------------------------------------------------------
 # Sampling configuration mirrors LHC_Gen_YAML.py
 # --------------------------------------------------------------------------------------
-COSMO_PARAMS = [
-    'logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio',
-    'm_ncdm', 'N_eff', 'r', 'log10T_heat_hmcode',
-    'w0_fld', 'wa_fld', 'Omega_k'
-]
 
-COSMO_PARAMS_CLASS = [
-    'ln10^{10}A_s', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio',
-    'm_ncdm', 'N_eff', 'r', 'log10T_heat_hmcode',
-    'w0_fld', 'wa_fld', 'Omega_k'
-]
-
-P18_VALUES = [3.043, 0.9652, -1, 0.02233, 0.1198, 0.0540, 0.06, 3.044, 0.0, 7.7, -1.0, 0.0, 0.0]
-P18_SIGMAS = [0.014, 0.0042, -1, 0.00015, 0.0012, 0.0074, 0.06, 0.3, 0.1, 0.2, 0.3, 0.3, 0.1]
-
-SET_WIDTH_FROM_PLC18 = True
-
-DEFAULT_BATCH_SIZE = 1
+DEFAULT_BATCH_SIZE = 10
 DEFAULT_OUTPUT = Path("./batch_outputs_32")
 
-Z_PK = 2.5
 K_VALS = np.logspace(-4, 1, 200)
 Z_BG = np.linspace(0, 5, 5_000)
-L_MAX = 3_000
+L_MAX = 5_000
 ERROR_LOG_FILENAME = "error_log.jsonl"
 
 class SamplerConfig(object):
@@ -167,14 +149,13 @@ def generate_lhs_samples(
             # (Optional) store convenience keys
             values['N_ncdm'] = int(N_ncdm_const)
             values['deg_ncdm'] = int(deg_ncdm)
-        '''
+        
         if values['N_eff'] > 3.03959:
             values['N_ur'] = values['N_eff'] - 3.03959
             values['T_ncdm'] = 0.71611
         else:
             values['N_ur'] = 0.0
             values['T_ncdm'] = 0.71611 * (values['N_eff'] / 3.03959)**0.25
-        '''
 
         samples.append(values)
 
@@ -224,11 +205,11 @@ def build_full_parameter_dict(sample: Dict[str, float]) -> Dict[str, float]:
         'm_ncdm': sample.get('m_ncdm', LCDM.m_ncdm) / (sample.get('N_ncdm', 1) * sample.get('deg_ncdm', 1)),
         'sigma_m': sample.get('m_ncdm', LCDM.m_ncdm),
         'N_eff': sample.get('N_eff', LCDM.Neff),
-        'r': sample.get('r', 0.0),
-        'log10T_heat_hmcode': sample.get('log10T_heat_hmcode', np.nan),
+        'r': sample.get('r', 0.05),
+        'log10T_heat_hmcode': sample.get('log10T_heat_hmcode'),
         'w0_fld': sample.get('w0_fld', -1.0),
         'wa_fld': sample.get('wa_fld', 0.0),
-        'Omega_k': sample.get('Omega_k', LCDM.omega_k),
+        'Omega_k': sample.get('Omega_k', 0.0),
         'N_ncdm': sample.get('N_ncdm', 1),
         'z_pk': sample.get('z_pk', 2.5),
         'N_ur': sample.get('N_ur', max(LCDM.Neff - 3, 0.0)),
@@ -252,7 +233,7 @@ def build_camb_class_input(full_params: Dict[str, float]) -> Dict[str, float]:
         'sigma_m': float(full_params['sigma_m']),
         'm_ncdm': float(full_params['m_ncdm']),
         'r': float(full_params['r']),
-        'log10T_heat_hmcode': float(full_params['log10T_heat_hmcode']) if not math.isnan(full_params['log10T_heat_hmcode']) else None,
+        'log10T_heat_hmcode': float(full_params['log10T_heat_hmcode']),
         'w0_fld': float(full_params['w0_fld']),
         'wa_fld': float(full_params['wa_fld']),
         'Omega_k': float(full_params['Omega_k']),
@@ -282,7 +263,6 @@ def configure_camb_params(p: Dict[str, float], nonlinear: bool = True, lmax: int
         mnu=p.get('m_ncdm', LCDM.m_ncdm)*p['deg_ncdm'],
         num_massive_neutrinos=p.get('deg_ncdm', 1),
         nnu=p.get('N_eff', LCDM.Neff),
-        #omk=p.get('Omega_k', LCDM.omega_k),
         omk=0.0,
     )
 
@@ -312,15 +292,15 @@ def configure_camb_params(p: Dict[str, float], nonlinear: bool = True, lmax: int
         acc.k_eta_max_scalar = max(getattr(acc, 'k_eta_max_scalar', 3.0 * lmax), 3.0 * lmax)
 
     params.NonLinear = model.NonLinear_both if nonlinear else model.NonLinear_none
-    params.NonLinearModel.set_params(HMCode_logT_AGN=p.get('log10T_heat_hmcode'))
 
-    params.set_matter_power(redshifts=[p.get('zpk', Z_PK)], kmax=10, k_per_logint=130)
+    params.set_matter_power(redshifts=[p.get('z_pk')], kmax=10, k_per_logint=130)
 
     params.AccurateMassiveNeutrinoTransfers = True
     params.DoLateRadTruncation = False
     params.recombination_model = "HyRec"
     params.halofit_version = "mead2020_feedback"
     params.TCMB = Planck.Tcmb0.value
+    params.NonLinearModel.set_params(HMCode_logT_AGN=p.get('log10T_heat_hmcode'))
 
     params.set_dark_energy(w=p.get('w0_fld', -1.0), wa=p.get('wa_fld', 0.0))
     
@@ -339,7 +319,6 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
         # Outputs
         'output': 'lCl,tCl,pCl,mPk',
         'modes': 's',
-        #'l_max_scalars': lmax,
 
         # Cosmology
         'h': p['H0'] / 100.0,
@@ -351,14 +330,17 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
         'n_s': p['ns'],
         'T_cmb': Planck.Tcmb0.value,
         'YHe': 'BBN',
-        'z_max_pk': max(p.get('zpk', Z_PK), 0.0) + 0.5,
+        'z_max_pk': max(p.get('z_pk'), 0.0) + 0.5,
         'N_ncdm': int(p.get('deg_ncdm', 1)),
         'm_ncdm': p['m_ncdm_str'],
         'N_ur': p['N_ur'],
+        'T_ncdm': p['T_ncdm_str'],
 
         # Accuracy controls
         'non_linear': 'hmcode',
+        'l_max_scalars': lmax,
         'hmcode_version': '2020_baryonic_feedback',
+        'P_k_max_h/Mpc': 100.0,
         'delta_l_max': 1800,
         'l_logstep': 1.025,
         'l_linstep': 20,
@@ -388,7 +370,7 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
         'recombination': 'HyRec',
         'sBBN file': '/external/bbn/sBBN_2021.dat',
         'lensing': 'yes',
-        'log10T_heat_hmcode': p.get('log10T_heat_hmcode', 0.0),
+        'log10T_heat_hmcode': p.get('log10T_heat_hmcode'),
         'fluid_equation_of_state': 'CLP',
         'Omega_fld': Omega_fld,
         'w0_fld': p.get('w0_fld', -1.0),
@@ -401,6 +383,7 @@ def configure_class(p: Dict[str, float], lmax: int = L_MAX, nonlinear: bool = Tr
             'r': p.get('r', 0.05),
             'k_pivot': 0.05,
             'reio_parametrization': 'reio_camb',
+            'l_max_tensors': lmax,
         })
 
     return class_params
@@ -411,13 +394,14 @@ def quick_validate_cosmology(p: Dict[str, float]) -> Tuple[bool, str]:
     Fast, low-accuracy validation for a cosmology.
     Ensures both CLASS and CAMB can initialize and compute a minimal set of quantities.
     """
+
     # --- CAMB test (fast)
     try:
         print("Trying CAMB")
         camb_params = configure_camb_params(p, nonlinear=False, lmax=200)
         camb_params.set_accuracy(AccuracyBoost=0.5, lAccuracyBoost=0.5, lSampleBoost=0.5)
         camb_params.set_for_lmax(lmax=200, lens_potential_accuracy=1)
-        camb_params.set_matter_power(redshifts=[0.0], kmax=2.0)
+        camb_params.set_matter_power(redshifts=[0.0], kmax=35.0)
         results = camb.get_results(camb_params)
         _ = results.get_sigma8()
     except Exception as e:
@@ -430,14 +414,6 @@ def quick_validate_cosmology(p: Dict[str, float]) -> Tuple[bool, str]:
         print("Trying CLASS")
         cl = classy.Class()
         test_params = configure_class(p, lmax=200, nonlinear=False, BB=False)
-        test_params.update({
-            'output': 'mPk',
-            'P_k_max_h/Mpc': 2.0,
-            'lensing': 'no',
-            'background_verbose': 0,
-            'tol_background_integration': 1e-3,
-            'tol_thermo_integration': 1e-3,
-        })
         cl.set(test_params)
         cl.compute()
         pk_val = cl.pk(0.1, 0.0)
@@ -469,7 +445,7 @@ def compute_class_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
     print("  [CLASS] Nonlinear CLASS computation finished ✅")
 
     print("  [CLASS] Extracting lensed/unlensed Cls...")
-    cls_l = cl_nl.lensed_cl()
+    cls_l = cl_nl.lensed_cl(lmax=L_MAX)
     ell_lensed = cls_l['ell']
     ell_factor = ell_lensed * (ell_lensed + 1) / (2 * np.pi)
 
@@ -562,13 +538,13 @@ def compute_camb_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
 
     print("  [CAMB] Computing nonlinear matter power spectra (P(k))...")
     pk_nonlin = camb.get_matter_power_interpolator(
-        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=3
-    ).P(p.get('zpk', Z_PK), K_VALS)
+        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=35, zmax=3
+    ).P(p.get('z_pk'), K_VALS)
     print("  [CAMB] Nonlinear P(k) computed ✅")
 
     print("  [CAMB] Computing nonlinear CDM+baryon matter power spectra (P_cb(k))...")
     pk_nonlin_cb = camb.get_matter_power_interpolator(
-        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=10, zmax=3,
+        camb_params_nl, nonlinear=True, hubble_units=False, k_hunit=False, kmax=35, zmax=3,
         var1='delta_nonu', var2='delta_nonu'
     ).P(p.get('z_pk'), K_VALS)
     print("  [CAMB] Nonlinear P_cb(k) computed ✅")
@@ -580,7 +556,7 @@ def compute_camb_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
 
     print("  [CAMB] Extracting derived parameters (θ*, σ₈, YHe, etc.)...")
     param_dict_z0 = dict(p)
-    param_dict_z0['zpk'] = 0.0
+    param_dict_z0['z_pk'] = 0.0
     camb_params_nl_zero = configure_camb_params(param_dict_z0, nonlinear=True, lmax=L_MAX)
     camb_results_nl_zero = camb.get_results(camb_params_nl_zero)
 
@@ -600,13 +576,13 @@ def compute_camb_observables(p: Dict[str, float]) -> Dict[str, np.ndarray]:
     print("  [CAMB] Computing linear matter power spectra...")
     camb_params_lin = configure_camb_params(p, nonlinear=False, lmax=L_MAX)
     pk_lin = camb.get_matter_power_interpolator(
-        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=3
-    ).P(p.get('zpk', Z_PK), K_VALS)
+        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=35, zmax=3
+    ).P(p.get('z_pk'), K_VALS)
     print("  [CAMB] Linear P(k) computed ✅")
 
     print("  [CAMB] Computing linear CDM+baryon matter power spectra (P_cb_lin(k))...")
     pk_lin_cb = camb.get_matter_power_interpolator(
-        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=10, zmax=3,
+        camb_params_lin, nonlinear=False, hubble_units=False, k_hunit=False, kmax=35, zmax=3,
         var1='delta_nonu', var2='delta_nonu'
     ).P(p.get('z_pk'), K_VALS)
     print("  [CAMB] Linear P_cb(k) computed ✅")
@@ -749,9 +725,9 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
 
         # --- Save results
         set_idx = set_counter + 1
-        save_parameters(batch_dir / f"set_{set_idx:02d}_params", params32)
-        save_npz(batch_dir / f"set_{set_idx:02d}_class", class_data)
-        save_npz(batch_dir / f"set_{set_idx:02d}_camb", camb_data)
+        save_parameters(batch_dir / f"set_{set_idx:02d}_params_true", params32)
+        save_npz(batch_dir / f"set_{set_idx:02d}_class_true", class_data)
+        save_npz(batch_dir / f"set_{set_idx:02d}_camb_true", camb_data)
         print(f"[Batch {batch_idx}, Set {set_idx}] Saved successfully.")
         set_counter += 1
 
@@ -781,7 +757,7 @@ def parse_args() -> SamplerConfig:
     parser.add_argument(
         '--yaml-file',
         type=Path,
-        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/parameter-ranges-test.yaml',
+        default='/home/jam249/rds/rds-dirac-dp002/jam249/Neural-Net-Emulator-for-Cosmological-Observables/Data-Generation/Parallel-Data-Gen/parameter-ranges-true.yaml',
         help='Cobaya YAML file used to define cosmological parameter priors.'
     )
     parser.add_argument(
@@ -833,4 +809,7 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    t_0 = time.perf_counter()
     main()
+    t_1 = time.perf_counter()
+    print(f"Total was: {t_1-t_0}s")
