@@ -21,6 +21,7 @@ import numpy as np
 import yaml
 from astropy.cosmology import Planck15 as Planck
 import time
+import multiprocessing as mp
 
 import classy
 import camb
@@ -57,7 +58,7 @@ class LCDM:
 # --------------------------------------------------------------------------------------
 
 DEFAULT_BATCH_SIZE = 10
-DEFAULT_OUTPUT = Path("./batch_outputs_32")
+DEFAULT_OUTPUT = Path("./sh_batch_outputs")
 
 K_VALS = np.logspace(-4, 1, 200)
 Z_BG = np.linspace(0, 5, 5_000)
@@ -108,6 +109,7 @@ def extract_param_specs(config: Dict) -> OrderedDict[str, ParamSpec]:
         specs[name] = ParamSpec(bounds=bounds, class_name=name)  # direct mapping
 
     return specs
+
 
 def build_candidate_arrays(specs: OrderedDict[str, ParamSpec], n_samples: int) -> np.ndarray:
     arrays = []
@@ -181,6 +183,38 @@ class LHSSamplePool:
         if not self._buffer:
             self._refill()
         return self._buffer.popleft().copy()
+    
+
+def safe_compute(func, args, timeout=2000):
+    """
+    Run a heavy CLASS or CAMB computation in a separate process.
+    This prevents a segfault in one run from crashing the main program.
+    Returns (result, error_message). If the run failed, result is None.
+    """
+    def target(q):
+        try:
+            result = func(*args)
+            q.put(("ok", result))
+        except Exception as e:
+            q.put(("error", repr(e)))
+
+    q = mp.Queue()
+    p = mp.Process(target=target, args=(q,))
+    p.start()
+    p.join(timeout)
+
+    if p.is_alive():
+        p.kill()
+        return None, f"Timeout after {timeout}s"
+
+    if not q.empty():
+        status, payload = q.get()
+        if status == "ok":
+            return payload, None
+        else:
+            return None, payload
+    else:
+        return None, "Unknown crash or segfault"
 
 
 # --------------------------------------------------------------------------------------
@@ -298,9 +332,11 @@ def configure_camb_params(p: Dict[str, float], nonlinear: bool = True, lmax: int
     params.AccurateMassiveNeutrinoTransfers = True
     params.DoLateRadTruncation = False
     params.recombination_model = "HyRec"
-    params.halofit_version = "mead2020_feedback"
     params.TCMB = Planck.Tcmb0.value
-    params.NonLinearModel.set_params(HMCode_logT_AGN=p.get('log10T_heat_hmcode'))
+    params.NonLinearModel.set_params(
+        halofit_version='mead2020_feedback',
+        HMCode_logT_AGN=p.get('log10T_heat_hmcode')
+    )
 
     params.set_dark_energy(w=p.get('w0_fld', -1.0), wa=p.get('wa_fld', 0.0))
     
@@ -687,7 +723,23 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         else:
             print(f"[Batch {batch_idx}, Set {set_counter+1}] Validation passed ✅")
 
-        # --- CAMB computation timing
+        # --- CAMB computation (safe subprocess)
+        t0 = time.perf_counter()
+        camb_data, camb_error = safe_compute(compute_camb_observables, (camb_class_input,))
+        if camb_data is None:
+            append_error_log(error_log_path, {
+                'batch': batch_idx,
+                'set_index': set_counter + 1,
+                'stage': 'CAMB',
+                'parameters': full_params,
+                'error': camb_error,
+            })
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB failed: {camb_error}")
+            continue
+        camb_time = time.perf_counter() - t0
+        camb_times.append(camb_time)
+        print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB complete in {camb_time:.2f} s ✅")
+        '''
         try:
             t0 = time.perf_counter()
             camb_data = compute_camb_observables(camb_class_input)
@@ -704,8 +756,24 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
             })
             print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB failed: {repr(exc)}")
             continue
-
-        # --- CLASS computation timing
+        '''
+        # --- CLASS computation (safe subprocess)
+        t1 = time.perf_counter()
+        class_data, class_error = safe_compute(compute_class_observables, (camb_class_input,))
+        if class_data is None:
+            append_error_log(error_log_path, {
+                'batch': batch_idx,
+                'set_index': set_counter + 1,
+                'stage': 'CLASS',
+                'parameters': full_params,
+                'error': class_error,
+            })
+            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS failed: {class_error}")
+            continue
+        class_time = time.perf_counter() - t1
+        class_times.append(class_time)
+        print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS complete in {class_time:.2f} s ✅")
+        '''
         try:
             t1 = time.perf_counter()
             class_data = compute_class_observables(camb_class_input)
@@ -730,7 +798,7 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         save_npz(batch_dir / f"set_{set_idx:02d}_camb_true", camb_data)
         print(f"[Batch {batch_idx}, Set {set_idx}] Saved successfully.")
         set_counter += 1
-
+        '''
     # --- Compute and print timing statistics
     if camb_times:
         camb_avg = np.mean(camb_times)
