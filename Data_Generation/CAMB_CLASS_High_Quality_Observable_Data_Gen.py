@@ -22,6 +22,8 @@ import yaml
 from astropy.cosmology import Planck15 as Planck
 import time
 import multiprocessing as mp
+import tempfile
+import pickle
 
 import classy
 import camb
@@ -185,16 +187,17 @@ class LHSSamplePool:
         return self._buffer.popleft().copy()
     
 
-def safe_compute(func, args, timeout=2000):
+def safe_compute(func, args, timeout=1800):
     """
-    Run a heavy CLASS or CAMB computation in a separate process.
-    This prevents a segfault in one run from crashing the main program.
-    Returns (result, error_message). If the run failed, result is None.
+    Run CLASS/CAMB in a separate process and save results to a temp file.
+    Protects against segfaults and ensures large data are returned safely.
     """
     def target(q):
         try:
             result = func(*args)
-            q.put(("ok", result))
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as f:
+                pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+                q.put(("ok", f.name))
         except Exception as e:
             q.put(("error", repr(e)))
 
@@ -203,14 +206,22 @@ def safe_compute(func, args, timeout=2000):
     p.start()
     p.join(timeout)
 
+    # Timeout handling
     if p.is_alive():
         p.kill()
         return None, f"Timeout after {timeout}s"
 
+    # Collect results
     if not q.empty():
         status, payload = q.get()
         if status == "ok":
-            return payload, None
+            filename = payload
+            try:
+                with open(filename, "rb") as f:
+                    result = pickle.load(f)
+            finally:
+                os.remove(filename)
+            return result, None
         else:
             return None, payload
     else:
@@ -725,7 +736,7 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
 
         # --- CAMB computation (safe subprocess)
         t0 = time.perf_counter()
-        camb_data, camb_error = safe_compute(compute_camb_observables, (camb_class_input,))
+        camb_data, camb_error = safe_compute(compute_camb_observables, (camb_class_input,), timeout=2300)
         if camb_data is None:
             append_error_log(error_log_path, {
                 'batch': batch_idx,
@@ -739,27 +750,10 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         camb_time = time.perf_counter() - t0
         camb_times.append(camb_time)
         print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB complete in {camb_time:.2f} s ✅")
-        '''
-        try:
-            t0 = time.perf_counter()
-            camb_data = compute_camb_observables(camb_class_input)
-            camb_time = time.perf_counter() - t0
-            camb_times.append(camb_time)
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB complete in {camb_time:.2f} s ✅")
-        except Exception as exc:
-            append_error_log(error_log_path, {
-                'batch': batch_idx,
-                'set_index': set_counter + 1,
-                'stage': 'CAMB',
-                'parameters': full_params,
-                'error': repr(exc),
-            })
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CAMB failed: {repr(exc)}")
-            continue
-        '''
+
         # --- CLASS computation (safe subprocess)
         t1 = time.perf_counter()
-        class_data, class_error = safe_compute(compute_class_observables, (camb_class_input,))
+        class_data, class_error = safe_compute(compute_class_observables, (camb_class_input,), timeout=2000)
         if class_data is None:
             append_error_log(error_log_path, {
                 'batch': batch_idx,
@@ -773,23 +767,6 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         class_time = time.perf_counter() - t1
         class_times.append(class_time)
         print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS complete in {class_time:.2f} s ✅")
-        '''
-        try:
-            t1 = time.perf_counter()
-            class_data = compute_class_observables(camb_class_input)
-            class_time = time.perf_counter() - t1
-            class_times.append(class_time)
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS complete in {class_time:.2f} s ✅")
-        except Exception as exc:
-            append_error_log(error_log_path, {
-                'batch': batch_idx,
-                'set_index': set_counter + 1,
-                'stage': 'CLASS',
-                'parameters': full_params,
-                'error': repr(exc),
-            })
-            print(f"[Batch {batch_idx}, Set {set_counter+1}] CLASS failed: {repr(exc)}")
-            continue
 
         # --- Save results
         set_idx = set_counter + 1
@@ -798,7 +775,7 @@ def run_single_batch(config: SamplerConfig, batch_idx: int) -> None:
         save_npz(batch_dir / f"set_{set_idx:02d}_camb_true", camb_data)
         print(f"[Batch {batch_idx}, Set {set_idx}] Saved successfully.")
         set_counter += 1
-        '''
+        
     # --- Compute and print timing statistics
     if camb_times:
         camb_avg = np.mean(camb_times)
